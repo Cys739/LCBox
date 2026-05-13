@@ -100,6 +100,11 @@ class DownloadManager: NSObject, ObservableObject {
     /// to auto-install regardless of the global "Auto .ipa to .app" setting.
     private var downloadIntents: [URL: DownloadIntent] = [:]
     
+    /// Per-download filename override. When set, the finish handler writes
+    /// the file with this name instead of the one derived from the URL.
+    /// Used by the "Download IPA Only → Rename" collision flow.
+    private var downloadFilenames: [URL: String] = [:]
+    
     private var urlSession: URLSession!
     private var tasks: [URL: URLSessionDownloadTask] = [:]
     private var resumeDataMap: [URL: Data] = [:]
@@ -572,10 +577,38 @@ class DownloadManager: NSObject, ObservableObject {
     
     /// Start (or resume) a download, recording the user's intent so the finish
     /// handler can act on it without re-consulting global UI state.
-    func startDownload(url: URL, intent: DownloadIntent) {
+    ///
+    /// - Parameter overrideFilename: when set, the IPA is saved to the Downloads
+    ///   folder under this name instead of the one derived from the URL. Used
+    ///   to implement "Rename" in the download-only collision flow.
+    func startDownload(url: URL, intent: DownloadIntent, overrideFilename: String? = nil) {
         downloadIntents[url] = intent
+        if let name = overrideFilename {
+            downloadFilenames[url] = name
+        } else {
+            downloadFilenames[url] = nil
+        }
         
-        if getLocalFile(for: url) != nil { return }
+        // When the user picks "Rename", the override filename targets a
+        // freshly-chosen name that, by construction, does not yet exist on
+        // disk. In that case the URL-keyed `getLocalFile` check would still
+        // see the *original* file and skip the download — wrong. So we only
+        // short-circuit on local file presence when the user is not asking
+        // for a renamed target.
+        if overrideFilename == nil, let localFile = getLocalFile(for: url) {
+            switch intent {
+            case .installToLiveContainer:
+                Task { try? await self.extractApp(from: localFile) }
+            case .useDefault:
+                if isAutoUnzipEnabled {
+                    Task { try? await self.extractApp(from: localFile) }
+                }
+            case .downloadOnly:
+                break
+            }
+            return
+        }
+        
         if case .paused = getStatus(for: url) {
             resumeDownload(url: url)
             return
@@ -609,6 +642,57 @@ class DownloadManager: NSObject, ObservableObject {
         }
     }
     
+    // MARK: - Downloads-Folder Collision Helpers
+    
+    /// The filename a download for `url` would land at, mirroring the logic
+    /// inside the finish handler. Used by the UI to detect collisions before
+    /// starting a download.
+    func defaultFilename(for url: URL) -> String {
+        var name = url.lastPathComponent
+        if url.pathExtension.isEmpty { name += ".ipa" }
+        return name
+    }
+    
+    /// True when a file with the default-derived name already exists in the
+    /// Downloads folder. Used to drive the "Replace / Rename / Cancel" prompt
+    /// before issuing a `.downloadOnly` request.
+    func downloadsFolderContains(filenameFor url: URL) -> Bool {
+        let target = currentDownloadFolder.appendingPathComponent(defaultFilename(for: url))
+        return FileManager.default.fileExists(atPath: target.path)
+    }
+    
+    /// Delete an existing file in the Downloads folder so a fresh download
+    /// can overwrite it. Used by the "Replace" branch of the collision flow.
+    func deleteDownloadedFile(named filename: String) throws {
+        let target = currentDownloadFolder.appendingPathComponent(filename)
+        if FileManager.default.fileExists(atPath: target.path) {
+            try FileManager.default.removeItem(at: target)
+            refreshFileList()
+        }
+    }
+    
+    /// Generate a filename that doesn't collide with anything currently in
+    /// the Downloads folder by inserting an incrementing " (N)" suffix.
+    /// Example: "1Blocker.ipa" → "1Blocker (2).ipa".
+    func nonCollidingFilename(basedOn filename: String) -> String {
+        let url = URL(fileURLWithPath: filename)
+        let ext = url.pathExtension
+        let stem = url.deletingPathExtension().lastPathComponent
+        let folder = currentDownloadFolder
+        let fm = FileManager.default
+        
+        var n = 2
+        while true {
+            let candidate = ext.isEmpty
+                ? "\(stem) (\(n))"
+                : "\(stem) (\(n)).\(ext)"
+            let target = folder.appendingPathComponent(candidate)
+            if !fm.fileExists(atPath: target.path) { return candidate }
+            n += 1
+            if n > 9999 { return candidate } // safety bail
+        }
+    }
+    
     func pauseDownload(url: URL) {
         guard let task = tasks[url] else { return }
         task.cancel { [weak self] data in
@@ -638,6 +722,7 @@ class DownloadManager: NSObject, ObservableObject {
         clearResumeData(for: url)
         downloadStates[url] = nil
         downloadIntents[url] = nil
+        downloadFilenames[url] = nil
     }
     
     func isDownloading(url: URL) -> Bool {
@@ -1009,8 +1094,8 @@ extension DownloadManager: URLSessionDownloadDelegate {
                     try manager.createDirectory(at: folder, withIntermediateDirectories: true)
                 }
                 
-                var finalName = sourceURL.lastPathComponent
-                if sourceURL.pathExtension.isEmpty {
+                var finalName = self.downloadFilenames[sourceURL] ?? sourceURL.lastPathComponent
+                if (URL(fileURLWithPath: finalName).pathExtension).isEmpty {
                     finalName += ".ipa"
                 }
                 
@@ -1022,6 +1107,7 @@ extension DownloadManager: URLSessionDownloadDelegate {
                 
                 let autoInstall = self.shouldAutoInstall(for: sourceURL)
                 self.downloadIntents[sourceURL] = nil
+                self.downloadFilenames[sourceURL] = nil
                 
                 if autoInstall && finalURL.pathExtension.lowercased() == "ipa" {
                     self.extractingFiles.insert(finalURL)

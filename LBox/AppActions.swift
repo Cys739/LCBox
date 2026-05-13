@@ -122,26 +122,75 @@ private struct GetPill: View {
     let url: URL?
     let size: PillSize
     @EnvironmentObject private var downloadManager: DownloadManager
+    @State private var collisionFilename: String? = nil
     
     var body: some View {
         Button {
-            if let url = url { downloadManager.startDownload(url: url, intent: .useDefault) }
+            startInstall()
         } label: {
             Text("GET")
         }
         .buttonStyle(.pill(.primary, size: size))
         .contextMenu {
             Button {
-                if let url = url { downloadManager.startDownload(url: url, intent: .installToLiveContainer) }
+                startInstall()
             } label: {
                 Label("Install to LiveContainer", systemImage: "square.and.arrow.down.on.square")
             }
             Button {
-                if let url = url { downloadManager.startDownload(url: url, intent: .downloadOnly) }
+                requestDownloadOnly()
             } label: {
                 Label("Download IPA Only", systemImage: "arrow.down.doc")
             }
         }
+        .alert("File Already Exists", isPresented: Binding(
+            get: { collisionFilename != nil },
+            set: { if !$0 { collisionFilename = nil } }
+        ), presenting: collisionFilename) { existing in
+            Button("Replace", role: .destructive) {
+                replaceAndDownload(existing: existing)
+            }
+            Button("Rename") {
+                renameAndDownload(existing: existing)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { existing in
+            Text("“\(existing)” is already in your Downloads folder. Replace it, or save the new download under a different name?")
+        }
+    }
+    
+    // MARK: Intent dispatch
+    
+    /// GET-tap and explicit "Install to LiveContainer" both route here.
+    /// Always installs, regardless of the global "Auto .ipa to .app" setting.
+    private func startInstall() {
+        guard let url = url else { return }
+        downloadManager.startDownload(url: url, intent: .installToLiveContainer)
+    }
+    
+    /// Download-only path. If a file with the default-derived name already
+    /// exists in Downloads, present the Replace/Rename collision alert
+    /// instead of silently overwriting (or, worse, silently doing nothing
+    /// because `startDownload` early-returns when a local file is present).
+    private func requestDownloadOnly() {
+        guard let url = url else { return }
+        if downloadManager.downloadsFolderContains(filenameFor: url) {
+            collisionFilename = downloadManager.defaultFilename(for: url)
+        } else {
+            downloadManager.startDownload(url: url, intent: .downloadOnly)
+        }
+    }
+    
+    private func replaceAndDownload(existing: String) {
+        guard let url = url else { return }
+        try? downloadManager.deleteDownloadedFile(named: existing)
+        downloadManager.startDownload(url: url, intent: .downloadOnly)
+    }
+    
+    private func renameAndDownload(existing: String) {
+        guard let url = url else { return }
+        let newName = downloadManager.nonCollidingFilename(basedOn: existing)
+        downloadManager.startDownload(url: url, intent: .downloadOnly, overrideFilename: newName)
     }
 }
 
