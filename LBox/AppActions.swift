@@ -256,46 +256,84 @@ private struct ProgressPill: View {
     
     private var diameter: CGFloat { size == .compact ? 28 : 32 }
     private var iconSize: CGFloat { size == .compact ? 10 : 14 }
+    private static let lineWidth: CGFloat = 3
     
     var body: some View {
         switch status {
         case .downloading(let progress, _, _):
-            Button {
-                downloadManager.pauseDownload(url: url)
-            } label: {
-                ZStack {
-                    Circle().stroke(lineWidth: 3).opacity(0.2).foregroundColor(.blue)
-                    Circle().trim(from: 0.0, to: CGFloat(max(0.01, progress)))
-                        .stroke(style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-                        .foregroundColor(.blue)
-                        .rotationEffect(Angle(degrees: 270.0))
-                        .animation(.linear, value: progress)
-                    Image(systemName: "pause.fill").font(.system(size: iconSize)).foregroundColor(.blue)
-                }
-                .frame(width: diameter, height: diameter)
+            Button { downloadManager.pauseDownload(url: url) } label: {
+                ProgressRing(
+                    progress: progress,
+                    tint: .blue,
+                    iconName: "pause.fill",
+                    diameter: diameter,
+                    iconSize: iconSize,
+                    lineWidth: Self.lineWidth
+                )
             }
         case .paused:
-            Button {
-                downloadManager.resumeDownload(url: url)
-            } label: {
-                ZStack {
-                    Circle().stroke(lineWidth: 3).opacity(0.2).foregroundColor(.blue)
-                    Image(systemName: "play.fill").font(.system(size: iconSize)).foregroundColor(.blue)
-                }
-                .frame(width: diameter, height: diameter)
+            Button { downloadManager.resumeDownload(url: url) } label: {
+                ProgressRing(
+                    progress: nil,
+                    tint: .blue,
+                    iconName: "play.fill",
+                    diameter: diameter,
+                    iconSize: iconSize,
+                    lineWidth: Self.lineWidth
+                )
             }
         case .waitingForConnection:
-            Button {
-                downloadManager.pauseDownload(url: url)
-            } label: {
-                ZStack {
-                    Circle().stroke(lineWidth: 3).opacity(0.2).foregroundColor(.orange)
-                    Image(systemName: "wifi.slash").font(.system(size: iconSize)).foregroundColor(.orange)
-                }
-                .frame(width: diameter, height: diameter)
+            Button { downloadManager.pauseDownload(url: url) } label: {
+                ProgressRing(
+                    progress: nil,
+                    tint: .orange,
+                    iconName: "wifi.slash",
+                    diameter: diameter,
+                    iconSize: iconSize,
+                    lineWidth: Self.lineWidth
+                )
             }
         case .none:
             EmptyView()
         }
+    }
+}
+
+/// A circular ring with an icon in the center. Optionally renders a progress
+/// arc on top of the ring (when `progress` is non-nil).
+///
+/// The background ring is drawn with `strokeBorder` so the stroke stays
+/// **inside** the shape's bounds. The progress arc would need the same, but
+/// `Circle().trim(...)` is not `InsettableShape`-conforming, so we pre-inset
+/// the circle by half the line width before trimming. Net effect: every
+/// painted pixel lives within the declared `diameter` — nothing leaks out and
+/// gets clipped by a parent container.
+private struct ProgressRing: View {
+    let progress: Double?
+    let tint: Color
+    let iconName: String
+    let diameter: CGFloat
+    let iconSize: CGFloat
+    let lineWidth: CGFloat
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .strokeBorder(tint.opacity(0.2), lineWidth: lineWidth)
+            
+            if let progress = progress {
+                Circle()
+                    .inset(by: lineWidth / 2)
+                    .trim(from: 0.0, to: CGFloat(max(0.01, progress)))
+                    .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.linear, value: progress)
+            }
+            
+            Image(systemName: iconName)
+                .font(.system(size: iconSize))
+                .foregroundColor(tint)
+        }
+        .frame(width: diameter, height: diameter)
     }
 }
