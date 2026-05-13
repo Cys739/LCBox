@@ -73,6 +73,9 @@ class DownloadManager: NSObject, ObservableObject {
     
     @Published var downloadStates: [URL: DownloadStatus] = [:]
     
+    // URLs the user explicitly chose to "download only" (skip auto-install for this one)
+    private var downloadOnlyURLs: Set<URL> = []
+    
     private var urlSession: URLSession!
     private var tasks: [URL: URLSessionDownloadTask] = [:]
     private var resumeDataMap: [URL: Data] = [:]
@@ -506,6 +509,18 @@ class DownloadManager: NSObject, ObservableObject {
     }
     
     func startDownload(url: URL) {
+        startDownload(url: url, downloadOnly: false)
+    }
+    
+    /// Start a download. When `downloadOnly` is true, the IPA will NOT be
+    /// auto-extracted/installed into LiveContainer even if `isAutoUnzipEnabled` is on —
+    /// it stays in the Downloads folder for the user.
+    func startDownload(url: URL, downloadOnly: Bool) {
+        if downloadOnly {
+            downloadOnlyURLs.insert(url)
+        } else {
+            downloadOnlyURLs.remove(url)
+        }
         if getLocalFile(for: url) != nil { return }
         if case .paused = getStatus(for: url) {
             resumeDownload(url: url)
@@ -558,6 +573,7 @@ class DownloadManager: NSObject, ObservableObject {
         tasks[url] = nil
         clearResumeData(for: url)
         downloadStates[url] = nil
+        downloadOnlyURLs.remove(url)
     }
     
     func isDownloading(url: URL) -> Bool {
@@ -940,7 +956,10 @@ extension DownloadManager: URLSessionDownloadDelegate {
                 
                 self.sendNotification(title: "Download Complete", body: "\(finalName) has been downloaded.", type: .success)
                 
-                if self.isAutoUnzipEnabled && finalURL.pathExtension.lowercased() == "ipa" {
+                let shouldAutoInstall = self.isAutoUnzipEnabled && !self.downloadOnlyURLs.contains(sourceURL)
+                self.downloadOnlyURLs.remove(sourceURL)
+                
+                if shouldAutoInstall && finalURL.pathExtension.lowercased() == "ipa" {
                     self.extractingFiles.insert(finalURL)
                     try await self.extractApp(from: finalURL)
                     if self.pendingInstallation == nil {

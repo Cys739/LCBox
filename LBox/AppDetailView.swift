@@ -322,6 +322,22 @@ struct DownloadButton: View {
                         .background(Color.blue.opacity(0.15))
                         .clipShape(Capsule())
                 }
+                .contextMenu {
+                    Button {
+                        if let url = downloadURL {
+                            downloadManager.startDownload(url: url, downloadOnly: false)
+                        }
+                    } label: {
+                        Label("Install to LiveContainer", systemImage: "square.and.arrow.down.on.square")
+                    }
+                    Button {
+                        if let url = downloadURL {
+                            downloadManager.startDownload(url: url, downloadOnly: true)
+                        }
+                    } label: {
+                        Label("Download IPA Only", systemImage: "arrow.down.doc")
+                    }
+                }
             }
         }
     }

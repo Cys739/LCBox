@@ -331,6 +331,7 @@ class AppStoreViewModel: ObservableObject {
     // Sort Options
     @Published var appSortOrder: AppSortOption = .name {
         didSet {
+            UserDefaults.standard.set(appSortOrder.rawValue, forKey: "kAppSortOrder")
             // Trigger async refresh when sort changes
             Task { await refreshDisplayApps() }
         }
@@ -372,6 +373,10 @@ class AppStoreViewModel: ObservableObject {
         if let storedSort = UserDefaults.standard.string(forKey: "kRepoSortOrder"),
            let option = RepoSortOption(rawValue: storedSort) {
             self.repoSortOrder = option
+        }
+        if let storedAppSort = UserDefaults.standard.string(forKey: "kAppSortOrder"),
+           let option = AppSortOption(rawValue: storedAppSort) {
+            self.appSortOrder = option
         }
         
         // Initialize Strict Grouping (Default to true)
