@@ -19,7 +19,7 @@ enum PillSize {
     case regular
     case compact
     
-    var hPadding: CGFloat { self == .compact ? 16 : 24 }
+    var hPadding: CGFloat { self == .compact ? 14 : 18 }
     var vPadding: CGFloat { 6 }
 }
 
@@ -32,6 +32,8 @@ struct PillButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(size == .compact ? .caption.bold() : .headline.bold())
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, size.hPadding)
             .padding(.vertical, size.vPadding)
             .foregroundColor(foreground)

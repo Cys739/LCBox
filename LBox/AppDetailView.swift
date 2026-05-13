@@ -74,7 +74,7 @@ struct AppDetailView: View {
                         .cornerRadius(4)
                 }
                 
-                HStack(spacing: 12) {
+                ScrollView(.horizontal, showsIndicators: false) {
                     AppActionsView(app: app)
                 }
                 .padding(.top, 4)
