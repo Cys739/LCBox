@@ -12,6 +12,28 @@ enum DownloadStatus: Equatable {
     case paused
     case waitingForConnection
     case none
+    
+    /// True when a download is in flight in any form (downloading, paused, or
+    /// waiting for connectivity). Useful for switching UI between progress
+    /// affordances and the idle action cluster.
+    var isActive: Bool {
+        switch self {
+        case .downloading, .paused, .waitingForConnection: return true
+        case .none: return false
+        }
+    }
+}
+
+/// What the user wants to happen with a download once it finishes.
+/// Extend with new cases (e.g. `.reveal`) without changing call sites that
+/// only consult `shouldAutoInstall`.
+enum DownloadIntent: Equatable {
+    /// Use the global default ("Auto .ipa to .app" setting).
+    case useDefault
+    /// Force installation into LiveContainer regardless of the global default.
+    case installToLiveContainer
+    /// Keep the .ipa in the Downloads folder; do not auto-install.
+    case downloadOnly
 }
 
 enum InstallAction {
@@ -73,8 +95,10 @@ class DownloadManager: NSObject, ObservableObject {
     
     @Published var downloadStates: [URL: DownloadStatus] = [:]
     
-    // URLs the user explicitly chose to "download only" (skip auto-install for this one)
-    private var downloadOnlyURLs: Set<URL> = []
+    /// Per-download user intent. Absence means `.useDefault`. Read in
+    /// `urlSession(_:downloadTask:didFinishDownloadingTo:)` to decide whether
+    /// to auto-install regardless of the global "Auto .ipa to .app" setting.
+    private var downloadIntents: [URL: DownloadIntent] = [:]
     
     private var urlSession: URLSession!
     private var tasks: [URL: URLSessionDownloadTask] = [:]
@@ -176,6 +200,32 @@ class DownloadManager: NSObject, ObservableObject {
     
     func isAppInstalled(bundleID: String) -> Bool {
         return installedApps.contains { $0.bundleID == bundleID }
+    }
+    
+    /// Try to launch an installed app via the LiveContainer URL scheme.
+    /// Returns `.launched` on success, `.needsSetup` if the app exists but
+    /// hasn't been run in LiveContainer yet (no LCAppInfo.plist), or
+    /// `.notInstalled` if no matching installed app is found.
+    enum LaunchResult {
+        case launched
+        case needsSetup
+        case notInstalled
+    }
+    
+    @discardableResult
+    func launchInstalledApp(bundleID: String) -> LaunchResult {
+        guard let installed = installedApps.first(where: { $0.bundleID == bundleID }) else {
+            return .notInstalled
+        }
+        guard hasLCAppInfo(bundleID: bundleID) else {
+            return .needsSetup
+        }
+        let folderName = installed.url.lastPathComponent
+        guard let url = URL(string: "livecontainer://livecontainer-launch?bundle-name=\(folderName)") else {
+            return .notInstalled
+        }
+        UIApplication.shared.open(url)
+        return .launched
     }
     
     // MARK: - Backup Logic
@@ -508,19 +558,23 @@ class DownloadManager: NSObject, ObservableObject {
         }
     }
     
+    /// Convenience: starts a download with the user's default intent
+    /// (honoring the global "Auto .ipa to .app" setting).
     func startDownload(url: URL) {
-        startDownload(url: url, downloadOnly: false)
+        startDownload(url: url, intent: .useDefault)
     }
     
-    /// Start a download. When `downloadOnly` is true, the IPA will NOT be
-    /// auto-extracted/installed into LiveContainer even if `isAutoUnzipEnabled` is on —
-    /// it stays in the Downloads folder for the user.
+    /// Legacy convenience preserved for callers that still pass a Bool.
+    /// New call sites should pass a `DownloadIntent` directly.
     func startDownload(url: URL, downloadOnly: Bool) {
-        if downloadOnly {
-            downloadOnlyURLs.insert(url)
-        } else {
-            downloadOnlyURLs.remove(url)
-        }
+        startDownload(url: url, intent: downloadOnly ? .downloadOnly : .installToLiveContainer)
+    }
+    
+    /// Start (or resume) a download, recording the user's intent so the finish
+    /// handler can act on it without re-consulting global UI state.
+    func startDownload(url: URL, intent: DownloadIntent) {
+        downloadIntents[url] = intent
+        
         if getLocalFile(for: url) != nil { return }
         if case .paused = getStatus(for: url) {
             resumeDownload(url: url)
@@ -542,6 +596,16 @@ class DownloadManager: NSObject, ObservableObject {
         } else {
             tasks[url]?.resume()
             downloadStates[url] = .downloading(progress: 0.0, written: 0, total: -1)
+        }
+    }
+    
+    /// Decide whether a freshly-finished download should be auto-installed,
+    /// given the recorded intent and the global setting.
+    private func shouldAutoInstall(for url: URL) -> Bool {
+        switch downloadIntents[url] ?? .useDefault {
+        case .installToLiveContainer: return true
+        case .downloadOnly:           return false
+        case .useDefault:             return isAutoUnzipEnabled
         }
     }
     
@@ -573,7 +637,7 @@ class DownloadManager: NSObject, ObservableObject {
         tasks[url] = nil
         clearResumeData(for: url)
         downloadStates[url] = nil
-        downloadOnlyURLs.remove(url)
+        downloadIntents[url] = nil
     }
     
     func isDownloading(url: URL) -> Bool {
@@ -956,10 +1020,10 @@ extension DownloadManager: URLSessionDownloadDelegate {
                 
                 self.sendNotification(title: "Download Complete", body: "\(finalName) has been downloaded.", type: .success)
                 
-                let shouldAutoInstall = self.isAutoUnzipEnabled && !self.downloadOnlyURLs.contains(sourceURL)
-                self.downloadOnlyURLs.remove(sourceURL)
+                let autoInstall = self.shouldAutoInstall(for: sourceURL)
+                self.downloadIntents[sourceURL] = nil
                 
-                if shouldAutoInstall && finalURL.pathExtension.lowercased() == "ipa" {
+                if autoInstall && finalURL.pathExtension.lowercased() == "ipa" {
                     self.extractingFiles.insert(finalURL)
                     try await self.extractApp(from: finalURL)
                     if self.pendingInstallation == nil {
