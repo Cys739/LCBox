@@ -132,11 +132,9 @@ private struct GetPill: View {
         }
         .buttonStyle(.pill(.primary, size: size))
         .contextMenu {
-            Button {
-                startInstall()
-            } label: {
-                Label("Install to LiveContainer", systemImage: "square.and.arrow.down.on.square")
-            }
+            // Long-press exposes the alt action only — installing to
+            // LiveContainer is what plain GET-tap does, so listing it here
+            // would just duplicate the primary action.
             Button {
                 requestDownloadOnly()
             } label: {
@@ -161,8 +159,8 @@ private struct GetPill: View {
     
     // MARK: Intent dispatch
     
-    /// GET-tap and explicit "Install to LiveContainer" both route here.
-    /// Always installs, regardless of the global "Auto .ipa to .app" setting.
+    /// GET-tap routes here. Always installs into LiveContainer, regardless
+    /// of the global "Auto .ipa to .app" setting.
     private func startInstall() {
         guard let url = url else { return }
         downloadManager.startDownload(url: url, intent: .installToLiveContainer)
